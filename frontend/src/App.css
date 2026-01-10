@@ -615,6 +615,21 @@ audio::-webkit-media-controls-time-remaining-display {
   font-size: 0.8rem;
 }
 
+.row-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.row-controls .btn-sm {
+  padding: 0.1rem 0.4rem;
+  min-width: 26px;
+  height: 26px;
+  font-size: 0.72rem;
+}
+
 /* BPM Control */
 .bpm-control {
   display: flex;
@@ -645,6 +660,55 @@ audio::-webkit-media-controls-time-remaining-display {
   background: var(--accent-primary);
   border-radius: 50%;
   cursor: pointer;
+}
+
+/* Column Control */
+.column-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.column-controls label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  min-width: 80px;
+}
+
+.column-buttons {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.btn-column {
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.btn-column:hover:not(:disabled) {
+  background: var(--bg-card-hover);
+  border-color: var(--accent-purple);
+  color: var(--accent-purple);
+}
+
+.btn-column:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 /* Preset Buttons */
@@ -690,7 +754,35 @@ audio::-webkit-media-controls-time-remaining-display {
   font-size: 0.9rem;
   font-weight: 600;
   color: var(--text-primary);
+  margin-bottom: 0;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.section-header .column-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.section-header .column-controls label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  min-width: auto;
+}
+
+.section-header .column-buttons {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
 }
 
 /* Sequencer Grid */
@@ -701,11 +793,18 @@ audio::-webkit-media-controls-time-remaining-display {
   gap: 0.5rem;
 }
 
-.sequencer-row,
+.sequencer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+}
+
 .piano-row {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  width: 100%;
 }
 
 /* Instrument Labels */
@@ -743,10 +842,37 @@ audio::-webkit-media-controls-time-remaining-display {
 }
 
 /* Step Grid */
+.step-grid-wrapper {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+
+.step-grid-wrapper::-webkit-scrollbar {
+  height: 8px;
+}
+
+.step-grid-wrapper::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.step-grid-wrapper::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+
+.step-grid-wrapper::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
+}
+
 .step-grid {
   display: flex;
   gap: 3px;
-  flex: 1;
+  min-width: max-content;
+  padding-bottom: 2px;
 }
 
 .step-btn {
@@ -783,10 +909,37 @@ audio::-webkit-media-controls-time-remaining-display {
 }
 
 /* Piano Roll */
+.piano-roll-wrapper {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+
+.piano-roll-wrapper::-webkit-scrollbar {
+  height: 8px;
+}
+
+.piano-roll-wrapper::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.piano-roll-wrapper::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+
+.piano-roll-wrapper::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
+}
+
 .piano-roll {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: max-content;
 }
 
 .note-label {
