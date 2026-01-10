@@ -1,12 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import BeatStudio from './BeatStudio';
 
 const API_BASE = '/api';
 
 function App() {
   // State
-  const [voices, setVoices] = useState([]);
-  const [selectedVoice, setSelectedVoice] = useState('');
   const [lyrics, setLyrics] = useState('');
   const [beatFile, setBeatFile] = useState(null);
   const [beatUrl, setBeatUrl] = useState('');
@@ -20,30 +18,11 @@ function App() {
   // Beat mode: 'upload' or 'create'
   const [beatMode, setBeatMode] = useState('upload');
   
+  // Genre and mood for Eleven Music
+  const [genre, setGenre] = useState('pop');
+  const [mood, setMood] = useState('emotional');
+  
   const beatInputRef = useRef(null);
-
-  // Fetch available voices on mount
-  useEffect(() => {
-    fetchVoices();
-  }, []);
-
-  const fetchVoices = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/voices`);
-      const data = await res.json();
-      
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to fetch voices');
-      }
-      
-      setVoices(data.voices || []);
-      if (data.voices?.length > 0) {
-        setSelectedVoice(data.voices[0].voice_id);
-      }
-    } catch (err) {
-      setError(`Failed to load voices: ${err.message}`);
-    }
-  };
 
   const handleBeatSelect = (e) => {
     const file = e.target.files?.[0];
@@ -98,12 +77,8 @@ function App() {
       setError('Please enter some lyrics');
       return;
     }
-    if (!selectedVoice) {
-      setError('Please select a voice');
-      return;
-    }
 
-    setLoading('Generating AI vocals... This may take a moment.');
+    setLoading('Generating acapella vocals with AI... This may take up to 90 seconds.');
     setError('');
     setVocalUrl('');
     setMixedUrl('');
@@ -114,7 +89,8 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           lyrics: lyrics.trim(),
-          voiceId: selectedVoice,
+          genre,
+          mood,
         }),
       });
 
@@ -323,40 +299,58 @@ This is where I belong"
             </div>
           </section>
 
-          {/* Step 3: Select Voice & Generate */}
+          {/* Step 3: Choose Style & Generate */}
           <section className="card">
             <div className="card-header">
               <span className="step-number">3</span>
               <h2>Generate Vocals</h2>
             </div>
             <div className="card-content">
-              <label className="label">Select AI Voice:</label>
-              <select
-                value={selectedVoice}
-                onChange={(e) => setSelectedVoice(e.target.value)}
-                className="voice-select"
-                disabled={voices.length === 0}
-              >
-                {voices.length === 0 ? (
-                  <option value="">Loading voices...</option>
-                ) : (
-                  voices.map((voice) => (
-                    <option key={voice.voice_id} value={voice.voice_id}>
-                      {voice.name} ({voice.category})
-                    </option>
-                  ))
-                )}
-              </select>
+              {/* Genre Selection */}
+              <label className="label">Genre:</label>
+              <div className="style-selector">
+                {['pop', 'r&b', 'hip-hop', 'rock', 'indie', 'soul', 'electronic'].map((g) => (
+                  <button
+                    key={g}
+                    type="button"
+                    className={`style-btn ${genre === g ? 'active' : ''}`}
+                    onClick={() => setGenre(g)}
+                  >
+                    {g.charAt(0).toUpperCase() + g.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              {/* Mood Selection */}
+              <label className="label">Mood:</label>
+              <div className="style-selector">
+                {['emotional', 'upbeat', 'chill', 'energetic', 'romantic', 'melancholic'].map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`style-btn ${mood === m ? 'active' : ''}`}
+                    onClick={() => setMood(m)}
+                  >
+                    {m.charAt(0).toUpperCase() + m.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="generate-hint">
+                🎤 AI will generate acapella vocals (voice only, no background music)
+              </div>
+
               <button
                 onClick={generateVocals}
-                disabled={!lyrics.trim() || !selectedVoice || loading}
-                className="btn btn-primary"
+                disabled={!lyrics.trim() || loading}
+                className="btn btn-primary btn-large"
               >
-                Generate AI Vocals
+                🎵 Generate AI Singing
               </button>
+              
               {vocalUrl && (
                 <div className="audio-preview">
-                  <span className="preview-label">Vocal Preview:</span>
+                  <span className="preview-label">🎤 Acapella Vocal Preview:</span>
                   <audio controls src={vocalUrl} />
                 </div>
               )}
@@ -401,7 +395,7 @@ This is where I belong"
         </div>
 
         <footer className="footer">
-          <p>Powered by ElevenLabs AI • Beats by Tone.js • Mixed with FFmpeg</p>
+          <p>Powered by Eleven Music AI • Beats by Tone.js • Mixed with FFmpeg</p>
         </footer>
       </div>
     </div>
