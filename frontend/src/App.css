@@ -566,6 +566,21 @@ audio::-webkit-media-controls-time-remaining-display {
   font-size: 0.8rem;
 }
 
+.row-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.row-controls .btn-sm {
+  padding: 0.1rem 0.4rem;
+  min-width: 26px;
+  height: 26px;
+  font-size: 0.72rem;
+}
+
 /* BPM Control */
 .bpm-control {
   display: flex;
