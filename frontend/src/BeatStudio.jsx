@@ -5,13 +5,18 @@ const DRUM_SAMPLES = {
   kick: 'https://tonejs.github.io/audio/drum-samples/CR78/kick.mp3',
   snare: 'https://tonejs.github.io/audio/drum-samples/CR78/snare.mp3',
   hihat: 'https://tonejs.github.io/audio/drum-samples/CR78/hihat.mp3',
+  clap: '/Sound/clap.wav',
+  snap: '/Sound/snap.wav',
+  '808': '/Sound/808.wav',
+  tick: '/Sound/tick.wav',
+  cymbal: '/Sound/cymbal.wav',
 };
 
-const SYNTH_NOTES = ['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5'];
+const SYNTH_NOTES = ['C3', 'D3', 'E3', 'F3', 'G3', 'A3', 'B3', 'C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5', 'D5', 'E5'];
 const MIN_STEPS = 4;
 const MAX_STEPS = 32;
 const INITIAL_STEPS = 16;
-const INSTRUMENTS = ['kick', 'snare', 'hihat'];
+const INSTRUMENTS = ['kick', 'snare', 'hihat', 'clap', 'snap', '808', 'tick', 'cymbal'];
 
 function BeatStudio({ onBeatReady, disabled }) {
   const [drumSteps, setDrumSteps] = useState(INITIAL_STEPS);
@@ -23,7 +28,7 @@ function BeatStudio({ onBeatReady, disabled }) {
   });
   const [melodyPattern, setMelodyPattern] = useState(() => Array(INITIAL_STEPS).fill(null).map(() => []));
   const [bpm, setBpm] = useState(120);
-  const [volumes, setVolumes] = useState({ kick: 0, snare: 0, hihat: -6, synth: -3 });
+  const [volumes, setVolumes] = useState({ kick: 0, snare: 0, hihat: -6, clap: -3, snap: -3, '808': -3, tick: -8, cymbal: -4, synth: -3 });
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentStep, setCurrentStep] = useState(-1);
   const [isExporting, setIsExporting] = useState(false);
@@ -51,6 +56,7 @@ function BeatStudio({ onBeatReady, disabled }) {
       drumVolumesRef.current[inst] = vol;
       players[inst] = new Tone.Player(DRUM_SAMPLES[inst]).connect(vol);
     });
+    await Promise.all(INSTRUMENTS.map(inst => players[inst].load(DRUM_SAMPLES[inst])));
     drumPlayersRef.current = players;
 
     const synthVol = new Tone.Volume(volumes.synth).toDestination();
@@ -70,6 +76,18 @@ function BeatStudio({ onBeatReady, disabled }) {
 
   useEffect(() => {
     if (!audioReady) return;
+    INSTRUMENTS.forEach(inst => {
+      if (drumVolumesRef.current[inst]) {
+        drumVolumesRef.current[inst].volume.value = volumes[inst];
+      }
+    });
+    if (synthVolumeRef.current) {
+      synthVolumeRef.current.volume.value = volumes.synth;
+    }
+  }, [volumes, audioReady]);
+
+  useEffect(() => {
+    if (!audioReady) return;
     if (sequenceRef.current) sequenceRef.current.dispose();
     const maxSteps = Math.max(drumSteps, melodySteps);
     sequenceRef.current = new Tone.Sequence(
@@ -78,7 +96,8 @@ function BeatStudio({ onBeatReady, disabled }) {
         if (step < drumSteps) {
           INSTRUMENTS.forEach(inst => {
             if (drumPattern[inst]?.[step] && drumPlayersRef.current?.[inst]) {
-              drumPlayersRef.current[inst].start(time);
+              // Nudge start time forward slightly to avoid duplicate time assertions in Tone.Player
+              drumPlayersRef.current[inst].start(time + 0.0001);
             }
           });
         }
@@ -237,6 +256,189 @@ function BeatStudio({ onBeatReady, disabled }) {
     setMelodyPattern(Array(melodySteps).fill(null).map(() => []));
   };
 
+  const generateBeat = () => {
+    // Randomize BPM in musical ranges
+    const bpmRanges = [
+      [85, 95],   // Laid-back hip-hop
+      [100, 115], // Mid-tempo groove
+      [120, 135], // Dance/house
+      [140, 155]  // Uptempo
+    ];
+    const range = bpmRanges[Math.floor(Math.random() * bpmRanges.length)];
+    const newBpm = Math.floor(Math.random() * (range[1] - range[0] + 1)) + range[0];
+    setBpm(newBpm);
+
+    const steps = 16;
+    setDrumSteps(steps);
+    setMelodySteps(steps);
+
+    // Choose a groove style
+    const grooveStyle = Math.random();
+    const newDrumPattern = {};
+
+    // Kick: Musical patterns based on groove
+    newDrumPattern.kick = Array(steps).fill(false).map((_, i) => {
+      // Always strong on beat 1
+      if (i === 0) return true;
+
+      if (grooveStyle < 0.33) {
+        // Four-on-floor pattern
+        return i % 4 === 0;
+      } else if (grooveStyle < 0.66) {
+        // Hip-hop pattern: 1 and 3, with occasional syncopation
+        if (i === 8) return true; // Beat 3
+        if (i === 6 && Math.random() > 0.7) return true; // Syncopation before 3
+        if (i === 14 && Math.random() > 0.8) return true; // End syncopation
+        return false;
+      } else {
+        // Broken beat pattern
+        if (i === 8) return Math.random() > 0.5; // Sometimes on 3
+        if (i === 3 && Math.random() > 0.6) return true; // Syncopation
+        if (i === 10 && Math.random() > 0.7) return true; // Off-beat
+        return false;
+      }
+    });
+
+    // Snare: Solid backbeat with occasional ghost notes
+    newDrumPattern.snare = Array(steps).fill(false).map((_, i) => {
+      // Backbeat on 2 and 4 (steps 4 and 12)
+      if (i === 4 || i === 12) return true;
+      // Rare fills before backbeat
+      if ((i === 11 || i === 3) && Math.random() > 0.85) return true;
+      return false;
+    });
+
+    // Hi-hat: Consistent rhythm with musical variation
+    const hihatPattern = Math.floor(Math.random() * 3);
+    newDrumPattern.hihat = Array(steps).fill(false).map((_, i) => {
+      if (hihatPattern === 0) {
+        // Eighth notes (every 2 steps)
+        return i % 2 === 0 || (i % 4 === 1 && Math.random() > 0.6);
+      } else if (hihatPattern === 1) {
+        // Sixteenth notes with swing
+        return i % 2 === 0 || (i % 2 === 1 && Math.random() > 0.3);
+      } else {
+        // Quarter notes with accents
+        return i % 4 === 0 || (i % 4 === 2 && Math.random() > 0.5);
+      }
+    });
+
+    // Clap: Layer with snare on backbeat
+    newDrumPattern.clap = Array(steps).fill(false).map((_, i) => {
+      if ((i === 4 || i === 12) && Math.random() > 0.5) return true;
+      return false;
+    });
+
+    // Snap: Percussion accents on off-beats
+    newDrumPattern.snap = Array(steps).fill(false).map((_, i) => {
+      if ([2, 6, 10, 14].includes(i) && Math.random() > 0.7) return true;
+      return false;
+    });
+
+    // 808: Deep bass hits, complementing or replacing kick
+    newDrumPattern['808'] = Array(steps).fill(false).map((_, i) => {
+      if (grooveStyle < 0.33) {
+        // Minimal 808 with four-on-floor
+        return i === 0 || (i === 8 && Math.random() > 0.5);
+      } else if (grooveStyle < 0.66) {
+        // Hip-hop 808: syncopated bass
+        if (i === 0) return true;
+        if (i === 6 && Math.random() > 0.6) return true;
+        if (i === 11 && Math.random() > 0.7) return true;
+        return false;
+      } else {
+        // Trap-style 808 rolls
+        if (i === 0 || i === 8) return true;
+        if ([3, 7, 11, 15].includes(i) && Math.random() > 0.8) return true;
+        return false;
+      }
+    });
+
+    // Tick: Light metronome-style layer on quarters/eighths
+    newDrumPattern.tick = Array(steps).fill(false).map((_, i) => {
+      if (i % 4 === 0) return Math.random() > 0.1; // Quarter accents
+      if (i % 2 === 0 && Math.random() > 0.7) return true; // Occasional 8ths
+      return false;
+    });
+
+    // Cymbal: Occasional crashes on downbeats
+    newDrumPattern.cymbal = Array(steps).fill(false).map((_, i) => {
+      if (i === 0) return Math.random() > 0.4;
+      if (i === 8 && Math.random() > 0.6) return true;
+      return false;
+    });
+
+    setDrumPattern(newDrumPattern);
+
+    // Generate melodic phrases with better musical structure
+    const scales = {
+      major: ['C4', 'D4', 'E4', 'G4', 'A4', 'C5'],        // C major pentatonic
+      minor: ['C4', 'D4', 'Eb4', 'G4', 'A4', 'C5'],       // C minor pentatonic (simulated)
+      dorian: ['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'C5']  // More notes
+    };
+
+    const scaleChoice = ['major', 'minor', 'dorian'][Math.floor(Math.random() * 3)];
+    const scale = scales[scaleChoice];
+
+    // Create a melodic phrase structure (AABA or ABAB)
+    const phraseType = Math.random() > 0.5 ? 'AABA' : 'ABAB';
+    const melodyDensity = Math.random() * 0.3 + 0.4; // 0.4-0.7
+
+    // Generate two 4-bar phrases
+    const generatePhrase = (isDense) => {
+      return Array(4).fill(null).map((_, i) => {
+        const adjustedDensity = isDense ? melodyDensity * 1.2 : melodyDensity * 0.8;
+
+        // Strong emphasis on downbeats
+        if (i === 0 && Math.random() < 0.8) {
+          const idx = Math.floor(Math.random() * (scale.length - 2)) + 1; // Avoid extremes on downbeat
+          return [scale[idx]];
+        }
+
+        if (Math.random() > adjustedDensity) return [];
+
+        // Melodic movement: prefer stepwise motion
+        const lastNote = i > 0 ? scale[Math.floor(scale.length / 2)] : scale[2];
+        const lastIndex = scale.indexOf(lastNote);
+        const movement = Math.random();
+
+        let noteIndex;
+        if (movement < 0.4) {
+          // Stepwise up
+          noteIndex = Math.min(lastIndex + 1, scale.length - 1);
+        } else if (movement < 0.8) {
+          // Stepwise down
+          noteIndex = Math.max(lastIndex - 1, 0);
+        } else {
+          // Jump
+          noteIndex = Math.floor(Math.random() * scale.length);
+        }
+
+        const notes = [scale[noteIndex]];
+
+        // Occasional harmony
+        if (Math.random() > 0.85) {
+          const harmonyIndex = Math.min(noteIndex + 2, scale.length - 1);
+          notes.push(scale[harmonyIndex]);
+        }
+
+        return notes;
+      });
+    };
+
+    const phraseA = generatePhrase(true);
+    const phraseB = generatePhrase(false);
+
+    let newMelodyPattern;
+    if (phraseType === 'AABA') {
+      newMelodyPattern = [...phraseA, ...phraseA, ...phraseB, ...phraseA];
+    } else {
+      newMelodyPattern = [...phraseA, ...phraseB, ...phraseA, ...phraseB];
+    }
+
+    setMelodyPattern(newMelodyPattern);
+  };
+
   const exportBeat = async () => {
     if (isExporting) return;
     await initAudio();
@@ -254,6 +456,7 @@ function BeatStudio({ onBeatReady, disabled }) {
           offlinePlayers[inst] = new Tone.Player(DRUM_SAMPLES[inst]).connect(vol);
         }
         const offlineSynthVol = new Tone.Volume(volumes.synth).toDestination();
+        await Promise.all(INSTRUMENTS.map(inst => offlinePlayers[inst].load(DRUM_SAMPLES[inst])));
         const offlineSynth = new Tone.PolySynth(Tone.Synth, {
           oscillator: { type: 'triangle' },
           envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 0.4 }
@@ -265,7 +468,7 @@ function BeatStudio({ onBeatReady, disabled }) {
           if (step < drumSteps) {
             INSTRUMENTS.forEach(inst => {
               if (drumPattern[inst][step]) {
-                transport.schedule(t => offlinePlayers[inst].start(t), time);
+                transport.schedule(t => offlinePlayers[inst].start(t + 0.0001), time);
               }
             });
           }
@@ -348,6 +551,7 @@ function BeatStudio({ onBeatReady, disabled }) {
           </button>
           <button onClick={stopPlayback} className="btn btn-transport" disabled={disabled}> Stop</button>
           <button onClick={clearAll} className="btn btn-secondary btn-sm"> Clear</button>
+          <button onClick={generateBeat} className="btn btn-primary btn-sm">🎲 Generate Beat</button>
         </div>
         <div className="bpm-control">
           <label>BPM: {bpm}</label>
