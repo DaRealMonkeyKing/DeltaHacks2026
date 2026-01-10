@@ -19,21 +19,27 @@ const DRUM_SAMPLES = {
 };
 
 const SYNTH_NOTES = ['C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5'];
-const STEPS = 16;
+const INITIAL_STEPS = 16;
+const MIN_STEPS = 4;
+const MAX_STEPS = 64;
 const INSTRUMENTS = ['kick', 'snare', 'hihat'];
 
 function BeatStudio({ onBeatReady, disabled }) {
+  // Separate step counts for drums and melody (columns)
+  const [drumSteps, setDrumSteps] = useState(INITIAL_STEPS);
+  const [melodySteps, setMelodySteps] = useState(INITIAL_STEPS);
+  
   // Sequencer state
   const [drumPattern, setDrumPattern] = useState(() => {
     const pattern = {};
     INSTRUMENTS.forEach(inst => {
-      pattern[inst] = Array(STEPS).fill(false);
+      pattern[inst] = Array(INITIAL_STEPS).fill(false);
     });
     return pattern;
   });
   
   const [melodyPattern, setMelodyPattern] = useState(() => 
-    Array(STEPS).fill(null)
+    Array(INITIAL_STEPS).fill(null)
   );
   
   const [bpm, setBpm] = useState(120);
@@ -55,6 +61,10 @@ function BeatStudio({ onBeatReady, disabled }) {
   const sequenceRef = useRef(null);
   const drumVolumesRef = useRef({});
   const synthVolumeRef = useRef(null);
+  
+  // Refs for syncing scroll between drum rows
+  const drumGridWrappersRef = useRef(new Array(INSTRUMENTS.length).fill(null));
+  const isScrollingRef = useRef(false);
 
   // Initialize Tone.js
   const initAudio = useCallback(async () => {
@@ -89,6 +99,49 @@ function BeatStudio({ onBeatReady, disabled }) {
     Transport.bpm.value = bpm;
   }, [bpm]);
 
+  // Sync scroll for all drum rows
+  useEffect(() => {
+    const drumWrappers = drumGridWrappersRef.current.filter(Boolean);
+    
+    if (drumWrappers.length === 0) return;
+
+    const scrollHandlers = new Map();
+
+    const handleScroll = (sourceElement) => {
+      if (isScrollingRef.current) return;
+      
+      isScrollingRef.current = true;
+      const scrollLeft = sourceElement.scrollLeft;
+      
+      // Sync all other drum rows to the same scroll position
+      drumWrappers.forEach(wrapper => {
+        if (wrapper !== sourceElement) {
+          wrapper.scrollLeft = scrollLeft;
+        }
+      });
+      
+      // Use requestAnimationFrame to allow the scroll to complete
+      requestAnimationFrame(() => {
+        isScrollingRef.current = false;
+      });
+    };
+
+    // Attach scroll listeners with stored handler references
+    drumWrappers.forEach(wrapper => {
+      const handler = () => handleScroll(wrapper);
+      scrollHandlers.set(wrapper, handler);
+      wrapper.addEventListener('scroll', handler);
+    });
+
+    // Cleanup
+    return () => {
+      scrollHandlers.forEach((handler, wrapper) => {
+        wrapper.removeEventListener('scroll', handler);
+      });
+      scrollHandlers.clear();
+    };
+  }, [drumSteps, drumPattern]);
+
   // Update volumes
   useEffect(() => {
     INSTRUMENTS.forEach(inst => {
@@ -110,25 +163,30 @@ function BeatStudio({ onBeatReady, disabled }) {
       sequenceRef.current.dispose();
     }
 
-    // Create new sequence
+    // Create new sequence - use max of drum and melody steps
+    const maxSteps = Math.max(drumSteps, melodySteps);
     sequenceRef.current = new Sequence(
       (time, step) => {
         setCurrentStep(step);
         
-        // Play drums
-        INSTRUMENTS.forEach(inst => {
-          if (drumPattern[inst][step] && drumPlayersRef.current?.[inst]) {
-            drumPlayersRef.current[inst].start(time);
-          }
-        });
+        // Play drums (only if step is within drum pattern)
+        if (step < drumSteps) {
+          INSTRUMENTS.forEach(inst => {
+            if (drumPattern[inst]?.[step] && drumPlayersRef.current?.[inst]) {
+              drumPlayersRef.current[inst].start(time);
+            }
+          });
+        }
         
-        // Play melody
-        const note = melodyPattern[step];
-        if (note && synthRef.current) {
-          synthRef.current.triggerAttackRelease(note, '8n', time);
+        // Play melody (only if step is within melody pattern)
+        if (step < melodySteps) {
+          const note = melodyPattern[step];
+          if (note && synthRef.current) {
+            synthRef.current.triggerAttackRelease(note, '8n', time);
+          }
         }
       },
-      [...Array(STEPS).keys()],
+      [...Array(maxSteps).keys()],
       '16n'
     );
 
@@ -141,7 +199,7 @@ function BeatStudio({ onBeatReady, disabled }) {
         sequenceRef.current.dispose();
       }
     };
-  }, [audioReady, drumPattern, melodyPattern, isPlaying]);
+  }, [audioReady, drumPattern, melodyPattern, isPlaying, drumSteps, melodySteps]);
 
   // Play/Pause
   const togglePlay = async () => {
@@ -182,14 +240,90 @@ function BeatStudio({ onBeatReady, disabled }) {
     );
   };
 
+  // Add column to drums
+  const addDrumColumn = () => {
+    if (drumSteps >= MAX_STEPS) return;
+    
+    // Stop playback when modifying columns
+    if (isPlaying) {
+      stopPlayback();
+    }
+    
+    const newSteps = drumSteps + 1;
+    setDrumSteps(newSteps);
+    
+    // Extend drum patterns with false
+    setDrumPattern(prev => {
+      const newPattern = {};
+      INSTRUMENTS.forEach(inst => {
+        newPattern[inst] = [...prev[inst], false];
+      });
+      return newPattern;
+    });
+  };
+
+  // Remove column from drums
+  const removeDrumColumn = () => {
+    if (drumSteps <= MIN_STEPS) return;
+    
+    // Stop playback when modifying columns
+    if (isPlaying) {
+      stopPlayback();
+    }
+    
+    const newSteps = drumSteps - 1;
+    setDrumSteps(newSteps);
+    
+    // Remove last element from drum patterns
+    setDrumPattern(prev => {
+      const newPattern = {};
+      INSTRUMENTS.forEach(inst => {
+        newPattern[inst] = prev[inst].slice(0, -1);
+      });
+      return newPattern;
+    });
+  };
+
+  // Add column to melody
+  const addMelodyColumn = () => {
+    if (melodySteps >= MAX_STEPS) return;
+    
+    // Stop playback when modifying columns
+    if (isPlaying) {
+      stopPlayback();
+    }
+    
+    const newSteps = melodySteps + 1;
+    setMelodySteps(newSteps);
+    
+    // Extend melody pattern with null
+    setMelodyPattern(prev => [...prev, null]);
+  };
+
+  // Remove column from melody
+  const removeMelodyColumn = () => {
+    if (melodySteps <= MIN_STEPS) return;
+    
+    // Stop playback when modifying columns
+    if (isPlaying) {
+      stopPlayback();
+    }
+    
+    const newSteps = melodySteps - 1;
+    setMelodySteps(newSteps);
+    
+    // Remove last element from melody pattern
+    setMelodyPattern(prev => prev.slice(0, -1));
+  };
+
   // Clear all
   const clearAll = () => {
     const emptyDrums = {};
     INSTRUMENTS.forEach(inst => {
-      emptyDrums[inst] = Array(STEPS).fill(false);
+      emptyDrums[inst] = Array(drumSteps).fill(false);
     });
     setDrumPattern(emptyDrums);
-    setMelodyPattern(Array(STEPS).fill(null));
+    setMelodyPattern(Array(melodySteps).fill(null));
   };
 
   // Export beat as WAV
@@ -201,9 +335,12 @@ function BeatStudio({ onBeatReady, disabled }) {
     stopPlayback();
 
     try {
-      // Calculate duration based on BPM (16 steps at 16th notes = 1 bar)
-      const barDuration = (60 / bpm) * 4; // 4 beats per bar
-      const duration = barDuration * 2; // Export 2 bars for looping
+      // Calculate duration based on BPM and step count (use max of drum and melody steps)
+      // Each step is a 16th note
+      const stepDuration = (60 / bpm) / 4; // Duration of 16th note in seconds
+      const repetitions = 2; // Export 2 repetitions for looping
+      const maxSteps = Math.max(drumSteps, melodySteps);
+      const duration = maxSteps * stepDuration * repetitions;
 
       // Use Tone.Offline to render audio
       const buffer = await Offline(async ({ transport }) => {
@@ -228,28 +365,32 @@ function BeatStudio({ onBeatReady, disabled }) {
         // Wait for samples to load
         await loaded();
 
-        // Schedule all notes for 2 bars
-        const stepDuration = (60 / bpm) / 4; // Duration of 16th note
-        
-        for (let bar = 0; bar < 2; bar++) {
-          for (let step = 0; step < STEPS; step++) {
-            const time = (bar * STEPS + step) * stepDuration;
+        // Schedule all notes for 2 repetitions
+        const repetitions = 2;
+        const maxSteps = Math.max(drumSteps, melodySteps);
+        for (let rep = 0; rep < repetitions; rep++) {
+          for (let step = 0; step < maxSteps; step++) {
+            const time = (rep * maxSteps + step) * stepDuration;
             
-            // Schedule drums
-            INSTRUMENTS.forEach(inst => {
-              if (drumPattern[inst][step]) {
+            // Schedule drums (only if step is within drum pattern)
+            if (step < drumSteps) {
+              INSTRUMENTS.forEach(inst => {
+                if (drumPattern[inst][step]) {
+                  transport.schedule((t) => {
+                    offlinePlayers[inst].start(t);
+                  }, time);
+                }
+              });
+            }
+            
+            // Schedule melody (only if step is within melody pattern)
+            if (step < melodySteps) {
+              const note = melodyPattern[step];
+              if (note) {
                 transport.schedule((t) => {
-                  offlinePlayers[inst].start(t);
+                  offlineSynth.triggerAttackRelease(note, '8n', t);
                 }, time);
               }
-            });
-            
-            // Schedule melody
-            const note = melodyPattern[step];
-            if (note) {
-              transport.schedule((t) => {
-                offlineSynth.triggerAttackRelease(note, '8n', t);
-              }, time);
             }
           }
         }
@@ -344,23 +485,33 @@ function BeatStudio({ onBeatReady, disabled }) {
 
   // Preset patterns
   const loadPreset = (preset) => {
+    // Generate patterns based on current drum step count, repeating the 16-step pattern
+    const generatePattern = (pattern16) => {
+      const repeats = Math.ceil(drumSteps / 16);
+      const fullPattern = [];
+      for (let i = 0; i < repeats; i++) {
+        fullPattern.push(...pattern16);
+      }
+      return fullPattern.slice(0, drumSteps);
+    };
+    
     if (preset === 'basic') {
       setDrumPattern({
-        kick: [true, false, false, false, true, false, false, false, true, false, false, false, true, false, false, false],
-        snare: [false, false, false, false, true, false, false, false, false, false, false, false, true, false, false, false],
-        hihat: [true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false],
+        kick: generatePattern([true, false, false, false, true, false, false, false, true, false, false, false, true, false, false, false]),
+        snare: generatePattern([false, false, false, false, true, false, false, false, false, false, false, false, true, false, false, false]),
+        hihat: generatePattern([true, false, true, false, true, false, true, false, true, false, true, false, true, false, true, false]),
       });
     } else if (preset === 'hiphop') {
       setDrumPattern({
-        kick: [true, false, false, false, false, false, true, false, true, false, false, false, false, false, false, false],
-        snare: [false, false, false, false, true, false, false, false, false, false, false, false, true, false, false, true],
-        hihat: [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true],
+        kick: generatePattern([true, false, false, false, false, false, true, false, true, false, false, false, false, false, false, false]),
+        snare: generatePattern([false, false, false, false, true, false, false, false, false, false, false, false, true, false, false, true]),
+        hihat: generatePattern([true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true]),
       });
     } else if (preset === 'dance') {
       setDrumPattern({
-        kick: [true, false, false, false, true, false, false, false, true, false, false, false, true, false, false, false],
-        snare: [false, false, false, false, true, false, false, false, false, false, false, false, true, false, false, false],
-        hihat: [false, false, true, false, false, false, true, false, false, false, true, false, false, false, true, false],
+        kick: generatePattern([true, false, false, false, true, false, false, false, true, false, false, false, true, false, false, false]),
+        snare: generatePattern([false, false, false, false, true, false, false, false, false, false, false, false, true, false, false, false]),
+        hihat: generatePattern([false, false, true, false, false, false, true, false, false, false, true, false, false, false, true, false]),
       });
     }
   };
@@ -406,7 +557,30 @@ function BeatStudio({ onBeatReady, disabled }) {
 
       {/* Drum Sequencer */}
       <div className="sequencer-section">
-        <h3>🥁 Drums</h3>
+        <div className="section-header">
+          <h3>🥁 Drums</h3>
+          <div className="column-controls">
+            <label>Columns: {drumSteps}</label>
+            <div className="column-buttons">
+              <button 
+                onClick={removeDrumColumn} 
+                className="btn btn-sm btn-column"
+                disabled={drumSteps <= MIN_STEPS || disabled}
+                title="Remove column"
+              >
+                −
+              </button>
+              <button 
+                onClick={addDrumColumn} 
+                className="btn btn-sm btn-column"
+                disabled={drumSteps >= MAX_STEPS || disabled}
+                title="Add column"
+              >
+                +
+              </button>
+            </div>
+          </div>
+        </div>
         <div className="sequencer-grid">
           {INSTRUMENTS.map((inst) => (
             <div key={inst} className="sequencer-row">
@@ -422,14 +596,24 @@ function BeatStudio({ onBeatReady, disabled }) {
                   title={`Volume: ${volumes[inst]}dB`}
                 />
               </div>
-              <div className="step-grid">
-                {drumPattern[inst].map((active, step) => (
-                  <button
-                    key={step}
-                    className={`step-btn ${active ? 'active' : ''} ${currentStep === step ? 'current' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
-                    onClick={() => toggleDrumStep(inst, step)}
-                  />
-                ))}
+              <div 
+                className="step-grid-wrapper"
+                ref={(el) => {
+                  const index = INSTRUMENTS.indexOf(inst);
+                  if (drumGridWrappersRef.current) {
+                    drumGridWrappersRef.current[index] = el;
+                  }
+                }}
+              >
+                <div className="step-grid">
+                  {drumPattern[inst].map((active, step) => (
+                    <button
+                      key={step}
+                      className={`step-btn ${active ? 'active' : ''} ${currentStep === step ? 'current' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
+                      onClick={() => toggleDrumStep(inst, step)}
+                    />
+                  ))}
+                </div>
               </div>
             </div>
           ))}
@@ -438,7 +622,30 @@ function BeatStudio({ onBeatReady, disabled }) {
 
       {/* Melody Sequencer */}
       <div className="sequencer-section">
-        <h3>🎹 Melody</h3>
+        <div className="section-header">
+          <h3>🎹 Melody</h3>
+          <div className="column-controls">
+            <label>Columns: {melodySteps}</label>
+            <div className="column-buttons">
+              <button 
+                onClick={removeMelodyColumn} 
+                className="btn btn-sm btn-column"
+                disabled={melodySteps <= MIN_STEPS || disabled}
+                title="Remove column"
+              >
+                −
+              </button>
+              <button 
+                onClick={addMelodyColumn} 
+                className="btn btn-sm btn-column"
+                disabled={melodySteps >= MAX_STEPS || disabled}
+                title="Add column"
+              >
+                +
+              </button>
+            </div>
+          </div>
+        </div>
         <div className="melody-grid">
           <div className="instrument-label">
             <span className="inst-name">synth</span>
@@ -452,21 +659,25 @@ function BeatStudio({ onBeatReady, disabled }) {
               title={`Volume: ${volumes.synth}dB`}
             />
           </div>
-          <div className="piano-roll">
-            {SYNTH_NOTES.slice().reverse().map((note, noteIdx) => (
-              <div key={note} className="piano-row">
-                <span className="note-label">{note}</span>
-                <div className="step-grid">
-                  {melodyPattern.map((activeNote, step) => (
-                    <button
-                      key={step}
-                      className={`step-btn melody-btn ${activeNote === note ? 'active' : ''} ${currentStep === step ? 'current' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
-                      onClick={() => toggleMelodyStep(SYNTH_NOTES.length - 1 - noteIdx, step)}
-                    />
-                  ))}
+          <div className="piano-roll-wrapper">
+            <div className="piano-roll">
+              {SYNTH_NOTES.slice().reverse().map((note, noteIdx) => (
+                <div key={note} className="piano-row">
+                  <span className="note-label">{note}</span>
+                  <div className="step-grid-wrapper">
+                    <div className="step-grid">
+                      {melodyPattern.map((activeNote, step) => (
+                        <button
+                          key={step}
+                          className={`step-btn melody-btn ${activeNote === note ? 'active' : ''} ${currentStep === step ? 'current' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
+                          onClick={() => toggleMelodyStep(SYNTH_NOTES.length - 1 - noteIdx, step)}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
       </div>
