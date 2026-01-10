@@ -1,15 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  start,
-  Volume,
-  Player,
-  PolySynth,
-  Synth,
-  Sequence,
-  Transport,
-  loaded,
-  Offline,
-} from 'tone';
+import * as Tone from 'tone';
 
 // Drum sample URLs (using Tone.js built-in samples)
 const DRUM_SAMPLES = {
@@ -33,7 +23,7 @@ function BeatStudio({ onBeatReady, disabled }) {
   });
   
   const [melodyPattern, setMelodyPattern] = useState(() => 
-    Array(STEPS).fill(null)
+    Array(STEPS).fill(null).map(() => [])
   );
   
   const [bpm, setBpm] = useState(120);
@@ -49,6 +39,13 @@ function BeatStudio({ onBeatReady, disabled }) {
   const [isExporting, setIsExporting] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
   
+  // Drag selection state
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragAction, setDragAction] = useState(null); // 'add' or 'remove'
+  const isDraggingRef = useRef(false);
+  const dragActionRef = useRef(null);
+  const lastDragCellRef = useRef(null);
+  
   // Refs for Tone.js objects
   const drumPlayersRef = useRef(null);
   const synthRef = useRef(null);
@@ -60,33 +57,33 @@ function BeatStudio({ onBeatReady, disabled }) {
   const initAudio = useCallback(async () => {
     if (audioReady) return;
     
-    await start();
+    await Tone.start();
     
     // Create drum players with individual volumes
     const players = {};
     INSTRUMENTS.forEach(inst => {
-      const vol = new Volume(volumes[inst]).toDestination();
+      const vol = new Tone.Volume(volumes[inst]).toDestination();
       drumVolumesRef.current[inst] = vol;
-      players[inst] = new Player(DRUM_SAMPLES[inst]).connect(vol);
+      players[inst] = new Tone.Player(DRUM_SAMPLES[inst]).connect(vol);
     });
     drumPlayersRef.current = players;
     
     // Create synth with volume
-    const synthVol = new Volume(volumes.synth).toDestination();
+    const synthVol = new Tone.Volume(volumes.synth).toDestination();
     synthVolumeRef.current = synthVol;
-    synthRef.current = new PolySynth(Synth, {
+    synthRef.current = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: 'triangle' },
       envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 0.4 }
     }).connect(synthVol);
     
     // Wait for samples to load
-    await loaded();
+    await Tone.loaded();
     setAudioReady(true);
   }, [audioReady, volumes]);
 
   // Update BPM
   useEffect(() => {
-    Transport.bpm.value = bpm;
+    Tone.Transport.bpm.value = bpm;
   }, [bpm]);
 
   // Update volumes
@@ -111,7 +108,7 @@ function BeatStudio({ onBeatReady, disabled }) {
     }
 
     // Create new sequence
-    sequenceRef.current = new Sequence(
+    sequenceRef.current = new Tone.Sequence(
       (time, step) => {
         setCurrentStep(step);
         
@@ -122,10 +119,10 @@ function BeatStudio({ onBeatReady, disabled }) {
           }
         });
         
-        // Play melody
-        const note = melodyPattern[step];
-        if (note && synthRef.current) {
-          synthRef.current.triggerAttackRelease(note, '8n', time);
+        // Play melody (chord support)
+        const notes = melodyPattern[step];
+        if (notes && notes.length > 0 && synthRef.current) {
+          synthRef.current.triggerAttackRelease(notes, '8n', time);
         }
       },
       [...Array(STEPS).keys()],
@@ -148,17 +145,17 @@ function BeatStudio({ onBeatReady, disabled }) {
     await initAudio();
     
     if (isPlaying) {
-      Transport.stop();
+      Tone.Transport.stop();
       setCurrentStep(-1);
     } else {
-      Transport.start();
+      Tone.Transport.start();
     }
     setIsPlaying(!isPlaying);
   };
 
   // Stop
   const stopPlayback = () => {
-    Transport.stop();
+    Tone.Transport.stop();
     setIsPlaying(false);
     setCurrentStep(-1);
   };
@@ -171,16 +168,186 @@ function BeatStudio({ onBeatReady, disabled }) {
     }));
   };
 
-  // Toggle melody step
+  // Set drum step to specific value
+  const setDrumStep = (instrument, step, value) => {
+    setDrumPattern(prev => ({
+      ...prev,
+      [instrument]: prev[instrument].map((v, i) => i === step ? value : v)
+    }));
+  };
+
+  // Handle drum step mouse down (start drag)
+  const handleDrumMouseDown = (instrument, step, e) => {
+    e.preventDefault();
+    
+    const isActive = drumPattern[instrument][step];
+    const action = isActive ? 'remove' : 'add';
+    const setValue = action === 'add';
+    
+    setDragAction(action);
+    setIsDragging(true);
+    isDraggingRef.current = true;
+    dragActionRef.current = action;
+    lastDragCellRef.current = `${instrument}-${step}`;
+    
+    // Apply the action immediately
+    setDrumStep(instrument, step, setValue);
+    
+    // Set up pointer tracking
+    const handlePointerMove = (moveEvent) => {
+      if (!isDraggingRef.current) return;
+      
+      const element = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+      if (!element) return;
+      
+      const instAttr = element.getAttribute('data-instrument');
+      const stepAttr = element.getAttribute('data-step');
+      
+      if (instAttr !== null && stepAttr !== null) {
+        const currentStep = parseInt(stepAttr);
+        const cellKey = `${instAttr}-${currentStep}`;
+        
+        if (lastDragCellRef.current === cellKey) return;
+        lastDragCellRef.current = cellKey;
+        
+        setDrumStep(instAttr, currentStep, setValue);
+      }
+    };
+    
+    const handlePointerUp = () => {
+      document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerUp);
+      handleMouseUp();
+    };
+    
+    document.addEventListener('pointermove', handlePointerMove);
+    document.addEventListener('pointerup', handlePointerUp);
+  };
+
+  // Toggle melody step (chord support)
   const toggleMelodyStep = (noteIndex, step) => {
     const note = SYNTH_NOTES[noteIndex];
     setMelodyPattern(prev => 
-      prev.map((v, i) => {
-        if (i !== step) return v;
-        return v === note ? null : note;
+      prev.map((notes, i) => {
+        if (i !== step) return notes;
+        // Toggle the note in the array
+        const noteArray = [...notes];
+        const noteIdx = noteArray.indexOf(note);
+        if (noteIdx > -1) {
+          // Remove note if it exists
+          noteArray.splice(noteIdx, 1);
+        } else {
+          // Add note if it doesn't exist
+          noteArray.push(note);
+        }
+        return noteArray;
       })
     );
   };
+
+  // Add/remove a specific note
+  const setMelodyNote = (noteIndex, step, shouldAdd) => {
+    const note = SYNTH_NOTES[noteIndex];
+    setMelodyPattern(prev => 
+      prev.map((notes, i) => {
+        if (i !== step) return notes;
+        const noteArray = [...notes];
+        const noteIdx = noteArray.indexOf(note);
+        
+        if (shouldAdd && noteIdx === -1) {
+          // Add note if it doesn't exist
+          noteArray.push(note);
+        } else if (!shouldAdd && noteIdx > -1) {
+          // Remove note if it exists
+          noteArray.splice(noteIdx, 1);
+        }
+        return noteArray;
+      })
+    );
+  };
+
+  // Handle melody note mouse down (start drag)
+  const handleMelodyMouseDown = (noteIndex, step, e) => {
+    e.preventDefault(); // Prevent text selection during drag
+    
+    const note = SYNTH_NOTES[noteIndex];
+    const notes = melodyPattern[step];
+    const hasNote = notes.includes(note);
+    
+    // Determine if we're adding or removing based on current state
+    const action = hasNote ? 'remove' : 'add';
+    const shouldAdd = action === 'add';
+    
+    setDragAction(action);
+    setIsDragging(true);
+    isDraggingRef.current = true;
+    dragActionRef.current = action;
+    lastDragCellRef.current = `${noteIndex}-${step}`;
+    
+    // Apply the action immediately
+    setMelodyNote(noteIndex, step, shouldAdd);
+    
+    // Set up pointer tracking for trackpad compatibility
+    const handlePointerMove = (moveEvent) => {
+      if (!isDraggingRef.current) return;
+      
+      // Find element at pointer position
+      const element = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+      if (!element) return;
+      
+      // Check if it's a melody button and get its data
+      const noteAttr = element.getAttribute('data-note-index');
+      const stepAttr = element.getAttribute('data-step');
+      
+      if (noteAttr !== null && stepAttr !== null) {
+        const currentNoteIndex = parseInt(noteAttr);
+        const currentStep = parseInt(stepAttr);
+        const cellKey = `${currentNoteIndex}-${currentStep}`;
+        
+        // Avoid re-triggering on the same cell
+        if (lastDragCellRef.current === cellKey) return;
+        lastDragCellRef.current = cellKey;
+        
+        console.log('Dragging over cell:', cellKey, 'action:', dragActionRef.current);
+        
+        // Apply the action (add or remove based on initial action)
+        setMelodyNote(currentNoteIndex, currentStep, shouldAdd);
+      }
+    };
+    
+    const handlePointerUp = () => {
+      document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerUp);
+      handleMouseUp();
+    };
+    
+    document.addEventListener('pointermove', handlePointerMove);
+    document.addEventListener('pointerup', handlePointerUp);
+  };
+
+  // Handle mouse up anywhere (end drag)
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+    setDragAction(null);
+    isDraggingRef.current = false;
+    dragActionRef.current = null;
+    lastDragCellRef.current = null;
+  }, []);
+
+  // Add global escape listener
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && isDraggingRef.current) {
+        handleMouseUp();
+      }
+    };
+    
+    document.addEventListener('keydown', handleEscape);
+    
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [handleMouseUp]);
 
   // Clear all
   const clearAll = () => {
@@ -189,7 +356,7 @@ function BeatStudio({ onBeatReady, disabled }) {
       emptyDrums[inst] = Array(STEPS).fill(false);
     });
     setDrumPattern(emptyDrums);
-    setMelodyPattern(Array(STEPS).fill(null));
+    setMelodyPattern(Array(STEPS).fill(null).map(() => []));
   };
 
   // Export beat as WAV
@@ -206,27 +373,27 @@ function BeatStudio({ onBeatReady, disabled }) {
       const duration = barDuration * 2; // Export 2 bars for looping
 
       // Use Tone.Offline to render audio
-      const buffer = await Offline(async ({ transport }) => {
+      const buffer = await Tone.Offline(async ({ transport }) => {
         // Create players in offline context
         const offlinePlayers = {};
         const offlineVolumes = {};
         
         for (const inst of INSTRUMENTS) {
-          const vol = new Volume(volumes[inst]).toDestination();
+          const vol = new Tone.Volume(volumes[inst]).toDestination();
           offlineVolumes[inst] = vol;
-          const player = new Player(DRUM_SAMPLES[inst]).connect(vol);
+          const player = new Tone.Player(DRUM_SAMPLES[inst]).connect(vol);
           offlinePlayers[inst] = player;
         }
         
         // Create synth in offline context
-        const offlineSynthVol = new Volume(volumes.synth).toDestination();
-        const offlineSynth = new PolySynth(Synth, {
+        const offlineSynthVol = new Tone.Volume(volumes.synth).toDestination();
+        const offlineSynth = new Tone.PolySynth(Tone.Synth, {
           oscillator: { type: 'triangle' },
           envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 0.4 }
         }).connect(offlineSynthVol);
 
         // Wait for samples to load
-        await loaded();
+        await Tone.loaded();
 
         // Schedule all notes for 2 bars
         const stepDuration = (60 / bpm) / 4; // Duration of 16th note
@@ -244,11 +411,11 @@ function BeatStudio({ onBeatReady, disabled }) {
               }
             });
             
-            // Schedule melody
-            const note = melodyPattern[step];
-            if (note) {
+            // Schedule melody (chord support)
+            const notes = melodyPattern[step];
+            if (notes && notes.length > 0) {
               transport.schedule((t) => {
-                offlineSynth.triggerAttackRelease(note, '8n', t);
+                offlineSynth.triggerAttackRelease(notes, '8n', t);
               }, time);
             }
           }
@@ -427,7 +594,10 @@ function BeatStudio({ onBeatReady, disabled }) {
                   <button
                     key={step}
                     className={`step-btn ${active ? 'active' : ''} ${currentStep === step ? 'current' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
-                    onClick={() => toggleDrumStep(inst, step)}
+                    data-instrument={inst}
+                    data-step={step}
+                    onMouseDown={(e) => handleDrumMouseDown(inst, step, e)}
+                    style={{ userSelect: 'none', touchAction: 'none' }}
                   />
                 ))}
               </div>
@@ -457,11 +627,14 @@ function BeatStudio({ onBeatReady, disabled }) {
               <div key={note} className="piano-row">
                 <span className="note-label">{note}</span>
                 <div className="step-grid">
-                  {melodyPattern.map((activeNote, step) => (
+                  {melodyPattern.map((activeNotes, step) => (
                     <button
                       key={step}
-                      className={`step-btn melody-btn ${activeNote === note ? 'active' : ''} ${currentStep === step ? 'current' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
-                      onClick={() => toggleMelodyStep(SYNTH_NOTES.length - 1 - noteIdx, step)}
+                      className={`step-btn melody-btn ${activeNotes.includes(note) ? 'active' : ''} ${currentStep === step ? 'current' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
+                      data-note-index={SYNTH_NOTES.length - 1 - noteIdx}
+                      data-step={step}
+                      onMouseDown={(e) => handleMelodyMouseDown(SYNTH_NOTES.length - 1 - noteIdx, step, e)}
+                      style={{ userSelect: 'none', touchAction: 'none' }}
                     />
                   ))}
                 </div>
