@@ -159,6 +159,11 @@ function App() {
       console.log('Voice cloned successfully:', data);
       console.log('Voice ID:', data.voiceId);
       setClonedVoiceId(data.voiceId);
+      setVoiceFiles([]);
+      setVoiceName('');
+      if (voiceInputRef.current) {
+        voiceInputRef.current.value = '';
+      }
       setIsCloningVoice(false);
     } catch (err) {
       console.error('Clone voice error:', err);
@@ -250,13 +255,27 @@ function App() {
     }
   };
 
-  const downloadFile = (url, filename) => {
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename || 'ai-music-studio-track.mp3';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const downloadFile = async (url, filename) => {
+    try {
+      // Fetch the file as a blob to ensure it downloads properly
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('File not found');
+      
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename || 'ai-music-studio-track.mp3';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Clean up the blob URL after a delay
+      setTimeout(() => window.URL.revokeObjectURL(blobUrl), 100);
+    } catch (err) {
+      setError(`Failed to download file: ${err.message}`);
+    }
   };
 
   const resetAll = () => {
