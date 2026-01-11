@@ -560,7 +560,7 @@ This is where I belong"
               <div className="generate-hint">
                 {clonedVoiceId 
                   ? '🎤 Using your cloned voice to generate vocals'
-                  : '🎤 AI will generate acapella vocals (voice only, no background music)'}
+                  : '🎤 AI will generate vocals'}
               </div>
 
               <button
