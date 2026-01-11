@@ -18,6 +18,7 @@ if (!fs.existsSync(tempDir)) {
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // API Routes
 app.use('/api', apiRoutes);
