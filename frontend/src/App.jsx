@@ -15,14 +15,24 @@ function App() {
   const [loading, setLoading] = useState('');
   const [error, setError] = useState('');
   
-  // Beat mode: 'upload' or 'create'
+  // Beat mode: 'upload', 'create', or 'ai'
   const [beatMode, setBeatMode] = useState('upload');
   
   // Genre and mood for Eleven Music
   const [genre, setGenre] = useState('pop');
   const [mood, setMood] = useState('emotional');
   
+  // AI Beat Generation
+  const [aiBeatDescription, setAiBeatDescription] = useState('');
+  
+  // Voice Cloning
+  const [voiceFiles, setVoiceFiles] = useState([]);
+  const [voiceName, setVoiceName] = useState('');
+  const [clonedVoiceId, setClonedVoiceId] = useState(null);
+  const [isCloningVoice, setIsCloningVoice] = useState(false);
+  
   const beatInputRef = useRef(null);
+  const voiceInputRef = useRef(null);
 
   const handleBeatSelect = (e) => {
     const file = e.target.files?.[0];
@@ -72,6 +82,91 @@ function App() {
     setError('');
   };
 
+  const generateAIBeat = async () => {
+    if (!aiBeatDescription.trim()) {
+      setError('Please enter a description for your beat');
+      return;
+    }
+
+    setLoading('Generating AI beat... This may take up to 30 seconds.');
+    setError('');
+
+    try {
+      const res = await fetch(`${API_BASE}/generate-music`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          description: aiBeatDescription.trim(),
+          musicLengthMs: 30000, // 30 seconds
+        }),
+      });
+
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to generate beat');
+      }
+
+      setBeatUrl(data.url);
+      setBeatFilename(data.filename);
+      setLoading('');
+    } catch (err) {
+      setError(err.message);
+      setLoading('');
+    }
+  };
+
+  const handleVoiceSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setVoiceFiles(files);
+      setError('');
+    }
+  };
+
+  const cloneVoice = async () => {
+    if (voiceFiles.length === 0) {
+      setError('Please select at least one audio file');
+      return;
+    }
+    if (!voiceName.trim()) {
+      setError('Please enter a name for your voice');
+      return;
+    }
+
+    setIsCloningVoice(true);
+    setError('');
+
+    try {
+      const formData = new FormData();
+      formData.append('name', voiceName.trim());
+      voiceFiles.forEach(file => {
+        formData.append('files', file);
+      });
+
+      const res = await fetch(`${API_BASE}/clone-voice`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+      
+      if (!res.ok) {
+        console.error('Clone voice error response:', data);
+        throw new Error(data.error || `Failed to clone voice (status: ${res.status})`);
+      }
+
+      console.log('Voice cloned successfully:', data);
+      console.log('Voice ID:', data.voiceId);
+      setClonedVoiceId(data.voiceId);
+      setIsCloningVoice(false);
+    } catch (err) {
+      console.error('Clone voice error:', err);
+      setError(err.message || 'Failed to clone voice. Please check the backend logs for details.');
+      setIsCloningVoice(false);
+    }
+  };
+
   const generateVocals = async () => {
     if (!lyrics.trim()) {
       setError('Please enter some lyrics');
@@ -84,14 +179,23 @@ function App() {
     setMixedUrl('');
 
     try {
+      const requestBody = {
+        lyrics: lyrics.trim(),
+        genre,
+        mood,
+      };
+      
+      if (clonedVoiceId) {
+        requestBody.voiceId = clonedVoiceId;
+        console.log('Including cloned voice ID in request:', clonedVoiceId);
+      } else {
+        console.log('No cloned voice ID, using default AI voice');
+      }
+      
       const res = await fetch(`${API_BASE}/generate-vocals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lyrics: lyrics.trim(),
-          genre,
-          mood,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       const data = await res.json();
@@ -163,9 +267,15 @@ function App() {
     setVocalFilename('');
     setMixedUrl('');
     setLyrics('');
+    setVoiceFiles([]);
+    setVoiceName('');
+    setClonedVoiceId(null);
     setError('');
     if (beatInputRef.current) {
       beatInputRef.current.value = '';
+    }
+    if (voiceInputRef.current) {
+      voiceInputRef.current.value = '';
     }
   };
 
@@ -175,6 +285,7 @@ function App() {
     setBeatUrl('');
     setBeatFilename('');
     setBeatFile(null);
+    setAiBeatDescription('');
     if (beatInputRef.current) {
       beatInputRef.current.value = '';
     }
@@ -228,6 +339,12 @@ function App() {
                 >
                   🎹 Create My Beat
                 </button>
+                <button 
+                  className={`mode-btn ${beatMode === 'ai' ? 'active' : ''}`}
+                  onClick={() => switchBeatMode('ai')}
+                >
+                  🤖 AI Generate Beat
+                </button>
               </div>
 
               {/* Upload Mode */}
@@ -263,7 +380,33 @@ function App() {
                 />
               )}
 
-              {/* Beat Preview (shown for both modes when beat is ready) */}
+              {/* AI Generate Mode */}
+              {beatMode === 'ai' && (
+                <div className="ai-beat-section">
+                  <label className="label">Describe your beat:</label>
+                  <textarea
+                    value={aiBeatDescription}
+                    onChange={(e) => setAiBeatDescription(e.target.value)}
+                    placeholder="e.g., 'A chill lo-fi hip hop beat with smooth piano and soft drums'
+or 'An energetic electronic dance beat with heavy bass and synth melodies'
+or 'A laid-back jazz beat with saxophone and brushed drums'"
+                    className="lyrics-input"
+                    rows={4}
+                  />
+                  <div className="generate-hint" style={{ marginTop: '8px', marginBottom: '12px' }}>
+                    💡 Describe the style, genre, instruments, mood, or tempo you want
+                  </div>
+                  <button 
+                    onClick={generateAIBeat} 
+                    disabled={!aiBeatDescription.trim() || loading}
+                    className="btn btn-primary"
+                  >
+                    🎵 Generate Beat
+                  </button>
+                </div>
+              )}
+
+              {/* Beat Preview (shown for all modes when beat is ready) */}
               {beatUrl && (
                 <div className="audio-preview beat-ready">
                   <span className="preview-label">✅ Beat Ready:</span>
@@ -274,7 +417,7 @@ function App() {
           </section>
 
           {/* Step 2: Enter Lyrics */}
-          <section className="card">
+          <section className="card card-wide">
             <div className="card-header">
               <span className="step-number">2</span>
               <h2>Enter Lyrics</h2>
@@ -299,10 +442,69 @@ This is where I belong"
             </div>
           </section>
 
-          {/* Step 3: Choose Style & Generate */}
-          <section className="card">
+          {/* Step 3: Clone Your Voice (Optional) */}
+          <section className="card card-wide">
             <div className="card-header">
               <span className="step-number">3</span>
+              <h2>Clone Your Voice (Optional)</h2>
+            </div>
+            <div className="card-content">
+              <div className="generate-hint" style={{ marginBottom: '1rem' }}>
+                💡 Upload audio samples of your voice to create a clone. Use your cloned voice to generate vocals in your own voice!
+              </div>
+              
+              <label className="label">Voice Name:</label>
+              <input
+                type="text"
+                value={voiceName}
+                onChange={(e) => setVoiceName(e.target.value)}
+                placeholder="e.g., My Voice, John's Voice"
+                className="lyrics-input"
+                style={{ marginBottom: '1rem', padding: '0.75rem' }}
+                disabled={!!clonedVoiceId || isCloningVoice}
+              />
+
+              <label className="label">Audio Files (MP3, WAV, M4A, OGG):</label>
+              <div className="file-upload" style={{ marginBottom: '1rem' }}>
+                <input
+                  ref={voiceInputRef}
+                  type="file"
+                  accept=".mp3,.wav,.m4a,.ogg"
+                  onChange={handleVoiceSelect}
+                  multiple
+                  id="voice-input"
+                  disabled={!!clonedVoiceId || isCloningVoice}
+                />
+                <label htmlFor="voice-input" className="file-label">
+                  {voiceFiles.length > 0 
+                    ? `${voiceFiles.length} file(s) selected: ${voiceFiles.map(f => f.name).join(', ')}`
+                    : 'Choose audio file(s) - at least 30 seconds recommended'}
+                </label>
+              </div>
+
+              {clonedVoiceId ? (
+                <div className="audio-preview beat-ready">
+                  <span className="preview-label">✅ Voice Cloned Successfully!</span>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                    Your voice is ready to use. Proceed to Step 4 to generate vocals.
+                  </p>
+                </div>
+              ) : (
+                <button 
+                  onClick={cloneVoice} 
+                  disabled={voiceFiles.length === 0 || !voiceName.trim() || isCloningVoice || loading}
+                  className="btn btn-primary"
+                >
+                  {isCloningVoice ? '🔄 Cloning Voice...' : '🎤 Clone Voice'}
+                </button>
+              )}
+            </div>
+          </section>
+
+          {/* Step 4: Choose Style & Generate */}
+          <section className="card card-wide">
+            <div className="card-header">
+              <span className="step-number">4</span>
               <h2>Generate Vocals</h2>
             </div>
             <div className="card-content">
@@ -337,7 +539,9 @@ This is where I belong"
               </div>
 
               <div className="generate-hint">
-                🎤 AI will generate acapella vocals (voice only, no background music)
+                {clonedVoiceId 
+                  ? '🎤 Using your cloned voice to generate vocals'
+                  : '🎤 AI will generate acapella vocals (voice only, no background music)'}
               </div>
 
               <button
@@ -357,10 +561,10 @@ This is where I belong"
             </div>
           </section>
 
-          {/* Step 4: Mix & Download */}
+          {/* Step 5: Mix & Download */}
           <section className="card card-wide">
             <div className="card-header">
-              <span className="step-number">4</span>
+              <span className="step-number">5</span>
               <h2>Mix & Download</h2>
             </div>
             <div className="card-content">
