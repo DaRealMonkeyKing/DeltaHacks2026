@@ -1,5 +1,90 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import * as Tone from 'tone';
+
+// RAF batching system for Spotify-level performance
+let rafId = null;
+let rafCallbacks = [];
+const scheduleRAF = (callback) => {
+  rafCallbacks.push(callback);
+  if (!rafId) {
+    rafId = requestAnimationFrame(() => {
+      const callbacks = rafCallbacks.slice();
+      rafCallbacks = [];
+      rafId = null;
+      callbacks.forEach(cb => cb());
+    });
+  }
+};
+
+// Throttle utility
+const throttle = (fn, delay) => {
+  let lastCall = 0;
+  return (...args) => {
+    const now = Date.now();
+    if (now - lastCall >= delay) {
+      lastCall = now;
+      fn(...args);
+    }
+  };
+};
+
+// Debounce utility
+const debounce = (fn, delay) => {
+  let timeoutId;
+  return (...args) => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => fn(...args), delay);
+  };
+};
+
+// Object pool for reusing objects
+class ObjectPool {
+  constructor(createFn, resetFn, size = 100) {
+    this.pool = [];
+    this.createFn = createFn;
+    this.resetFn = resetFn;
+    for (let i = 0; i < size; i++) {
+      this.pool.push(createFn());
+    }
+  }
+  acquire() {
+    return this.pool.length > 0 ? this.pool.pop() : this.createFn();
+  }
+  release(obj) {
+    this.resetFn(obj);
+    if (this.pool.length < 200) this.pool.push(obj);
+  }
+}
+
+// Memoized drum cell component
+const DrumCell = React.memo(({ inst, step, active, isPlaying, onMouseDown }) => (
+  <button
+    className={`step-btn ${active ? 'active' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
+    data-instrument={inst}
+    data-step={step}
+    onMouseDown={onMouseDown}
+    style={{ userSelect: 'none', touchAction: 'none', willChange: 'transform' }}
+  />
+), (prev, next) => (
+  prev.active === next.active &&
+  prev.isPlaying === next.isPlaying &&
+  prev.step === next.step
+));
+
+// Memoized melody cell component
+const MelodyCell = React.memo(({ noteIndex, step, isActive, isMerge, onMouseDown }) => (
+  <button
+    className={`step-btn melody-btn ${isActive ? 'active' : ''} ${isMerge ? 'merge-note' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
+    data-note-index={noteIndex}
+    data-step={step}
+    onMouseDown={onMouseDown}
+    style={{ userSelect: 'none', touchAction: 'none', willChange: 'transform' }}
+  />
+), (prev, next) => (
+  prev.isActive === next.isActive &&
+  prev.isMerge === next.isMerge &&
+  prev.step === next.step
+));
 
 const DRUM_SAMPLES = {
   kick: 'https://tonejs.github.io/audio/drum-samples/CR78/kick.mp3',
@@ -27,16 +112,21 @@ function BeatStudio({ onBeatReady, disabled }) {
     return pattern;
   });
   const [melodyPattern, setMelodyPattern] = useState(() => Array(INITIAL_STEPS).fill(null).map(() => []));
+  const [mergePattern, setMergePattern] = useState(() => Array(INITIAL_STEPS).fill(null).map(() => [])); // Track which notes are merge notes
+  const [isMergeMode, setIsMergeMode] = useState(false); // Toggle between normal and merge mode
   const [bpm, setBpm] = useState(120);
   const [volumes, setVolumes] = useState({ kick: 0, snare: 0, hihat: -6, clap: -3, snap: -3, '808': -3, tick: -8, cymbal: -4, synth: -3 });
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentStep, setCurrentStep] = useState(-1);
   const [isExporting, setIsExporting] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
 
   const [isDragging, setIsDragging] = useState(false);
   const isDraggingRef = useRef(false);
   const lastDragCellRef = useRef(null);
+  const currentStepRef = useRef(-1);
+  const currentStepCellsRef = useRef([]);
+  const needsSequenceUpdateRef = useRef(true);
+   const isMergeModeRef = useRef(isMergeMode);
 
   const drumPlayersRef = useRef(null);
   const synthRef = useRef(null);
@@ -45,6 +135,86 @@ function BeatStudio({ onBeatReady, disabled }) {
   const synthVolumeRef = useRef(null);
   const drumGridWrapperRef = useRef(null);
   const melodyGridWrapperRef = useRef(null);
+  const cachedDrumPatternRef = useRef(drumPattern);
+  const cachedMelodyPatternRef = useRef(melodyPattern);
+  const cachedMergePatternRef = useRef(mergePattern);
+  const cachedMergeDurationsRef = useRef({});
+  const batchedUpdatesRef = useRef([]);
+  const batchTimeoutRef = useRef(null);
+
+  // Batch multiple state updates into single render
+  const batchStateUpdate = useCallback((updateFn) => {
+    batchedUpdatesRef.current.push(updateFn);
+    if (!batchTimeoutRef.current) {
+      batchTimeoutRef.current = setTimeout(() => {
+        const updates = batchedUpdatesRef.current.slice();
+        batchedUpdatesRef.current = [];
+        batchTimeoutRef.current = null;
+        React.startTransition(() => {
+          updates.forEach(fn => fn());
+        });
+      }, 0);
+    }
+  }, []);
+
+  // Update cached refs when patterns change
+  useEffect(() => {
+    cachedDrumPatternRef.current = drumPattern;
+    cachedMelodyPatternRef.current = melodyPattern;
+    cachedMergePatternRef.current = mergePattern;
+    needsSequenceUpdateRef.current = true;
+  }, [drumPattern, melodyPattern, mergePattern]);
+
+   // Update merge mode ref
+   useEffect(() => {
+     isMergeModeRef.current = isMergeMode;
+   }, [isMergeMode]);
+  // Pre-calculate merge note durations once
+  const mergeNoteDurations = useMemo(() => {
+    const durations = {};
+    for (let step = 0; step < melodySteps; step++) {
+      const mergeNotes = mergePattern[step];
+      if (mergeNotes && mergeNotes.length > 0) {
+        mergeNotes.forEach(note => {
+          const isPreviousStepMerge = step > 0 && mergePattern[step - 1] && mergePattern[step - 1].includes(note);
+          if (!isPreviousStepMerge) {
+            let duration = 1;
+            for (let i = step + 1; i < melodySteps; i++) {
+              if (mergePattern[i] && mergePattern[i].includes(note)) {
+                duration++;
+              } else {
+                break;
+              }
+            }
+            durations[`${step}-${note}`] = duration;
+          }
+        });
+      }
+    }
+    cachedMergeDurationsRef.current = durations;
+    return durations;
+  }, [mergePattern, melodySteps]);
+
+  const secondsPerSixteenth = useMemo(() => (60 / bpm) / 4, [bpm]);
+
+  // IndexedDB pattern caching
+  const savePatternToCache = useMemo(() => debounce((pattern) => {
+    try {
+      localStorage.setItem('beatstudio_autosave', JSON.stringify({
+        drumPattern,
+        melodyPattern,
+        mergePattern,
+        bpm,
+        timestamp: Date.now()
+      }));
+    } catch (e) {
+      // Ignore cache errors
+    }
+  }, 2000), [drumPattern, melodyPattern, mergePattern, bpm]);
+
+  useEffect(() => {
+    savePatternToCache();
+  }, [drumPattern, melodyPattern, mergePattern, savePatternToCache]);
 
   const initAudio = useCallback(async () => {
     if (audioReady) return;
@@ -63,7 +233,7 @@ function BeatStudio({ onBeatReady, disabled }) {
     synthVolumeRef.current = synthVol;
     synthRef.current = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: 'triangle' },
-      envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 0.4 }
+      envelope: { attack: 0.02, decay: 0.1, sustain: 0.8, release: 0.2 }
     }).connect(synthVol);
 
     await Tone.loaded();
@@ -86,40 +256,103 @@ function BeatStudio({ onBeatReady, disabled }) {
     }
   }, [volumes, audioReady]);
 
+  // Update visual indicator via DOM with RAF batching
+  const updateCurrentStepVisual = useCallback((step) => {
+    scheduleRAF(() => {
+      const oldCells = currentStepCellsRef.current;
+      const len = oldCells.length;
+      for (let i = 0; i < len; i++) {
+        oldCells[i]?.classList.remove('current');
+      }
+      if (step >= 0) {
+        const newCells = document.querySelectorAll(`[data-step="${step}"]`);
+        currentStepCellsRef.current = Array.from(newCells);
+        const newLen = newCells.length;
+        for (let i = 0; i < newLen; i++) {
+          newCells[i]?.classList.add('current');
+        }
+      } else {
+        currentStepCellsRef.current = [];
+      }
+      currentStepRef.current = step;
+    });
+  }, []);
+
+  // Create sequence only when timing/length changes; live-read refs for patterns/durations
   useEffect(() => {
     if (!audioReady) return;
-    if (sequenceRef.current) sequenceRef.current.dispose();
+    if (sequenceRef.current) {
+      sequenceRef.current.dispose();
+      sequenceRef.current = null;
+    }
+    
     const maxSteps = Math.max(drumSteps, melodySteps);
+    const spSixteenth = secondsPerSixteenth;
+    
     sequenceRef.current = new Tone.Sequence(
       (time, step) => {
-        setCurrentStep(step);
-        if (step < drumSteps) {
-          INSTRUMENTS.forEach(inst => {
-            if (drumPattern[inst]?.[step] && drumPlayersRef.current?.[inst]) {
-              // Nudge start time forward slightly to avoid duplicate time assertions in Tone.Player
-              drumPlayersRef.current[inst].start(time + 0.0001);
+        // Update visual via direct DOM manipulation - zero React overhead
+        Tone.Draw.schedule(() => updateCurrentStepVisual(step), time);
+        
+        // Drums - use cached ref
+        const drumPat = cachedDrumPatternRef.current;
+        const drumPlayers = drumPlayersRef.current;
+        if (step < drumSteps && drumPlayers) {
+          for (let i = 0; i < 8; i++) {
+            const inst = INSTRUMENTS[i];
+            if (drumPat[inst][step]) {
+              // tiny epsilon to avoid duplicate-time assertions
+              drumPlayers[inst].start(time + 0.0001);
             }
-          });
+          }
         }
-        if (step < melodySteps) {
-          const notes = melodyPattern[step];
-          if (notes && notes.length > 0 && synthRef.current) {
-            synthRef.current.triggerAttackRelease(notes, '8n', time);
+        
+        // Melody - use cached refs
+        const melodyPat = cachedMelodyPatternRef.current;
+        const mergePat = cachedMergePatternRef.current;
+        const synth = synthRef.current;
+        if (step < melodySteps && synth) {
+          const notes = melodyPat[step];
+          const mergeNotes = mergePat[step];
+          const noteCount = notes.length;
+          if (noteCount > 0) {
+            for (let i = 0; i < noteCount; i++) {
+              const note = notes[i];
+              const isMerge = mergeNotes && mergeNotes.includes(note);
+              const evtTime = time + i * 0.00001; // spread same-step events slightly
+              
+              if (isMerge) {
+                // read latest precomputed durations dynamically
+                const duration = cachedMergeDurationsRef.current[`${step}-${note}`];
+                if (duration) {
+                  synth.triggerAttackRelease([note], spSixteenth * duration, evtTime);
+                }
+              } else {
+                synth.triggerAttackRelease([note], '16n', evtTime);
+              }
+            }
           }
         }
       },
       [...Array(maxSteps).keys()],
       '16n'
     );
+    
     if (isPlaying) sequenceRef.current.start(0);
-    return () => sequenceRef.current?.dispose();
-  }, [audioReady, drumPattern, melodyPattern, isPlaying, drumSteps, melodySteps]);
+    
+    return () => {
+      if (sequenceRef.current) {
+        sequenceRef.current.dispose();
+        sequenceRef.current = null;
+      }
+    };
+  }, [audioReady, drumSteps, melodySteps, isPlaying, secondsPerSixteenth, updateCurrentStepVisual]);
 
   const togglePlay = async () => {
     await initAudio();
     if (isPlaying) {
       Tone.Transport.stop();
-      setCurrentStep(-1);
+      updateCurrentStepVisual(-1);
     } else {
       Tone.Transport.start();
     }
@@ -129,25 +362,29 @@ function BeatStudio({ onBeatReady, disabled }) {
   const stopPlayback = () => {
     Tone.Transport.stop();
     setIsPlaying(false);
-    setCurrentStep(-1);
+    updateCurrentStepVisual(-1);
   };
 
-  const setDrumStep = (instrument, step, value) => {
-    setDrumPattern(prev => ({
-      ...prev,
-      [instrument]: prev[instrument].map((v, i) => (i === step ? value : v))
-    }));
-  };
+  const setDrumStep = useCallback((instrument, step, value) => {
+    batchStateUpdate(() => {
+      setDrumPattern(prev => {
+        if (prev[instrument][step] === value) return prev; // No-op if same
+        const newInstrumentPattern = prev[instrument].slice();
+        newInstrumentPattern[step] = value;
+        return { ...prev, [instrument]: newInstrumentPattern };
+      });
+    });
+  }, [batchStateUpdate]);
 
-  const handleDrumMouseDown = (instrument, step, e) => {
+  const handleDrumMouseDown = useCallback((instrument, step, e) => {
     e.preventDefault();
-    const setValue = !drumPattern[instrument][step];
+    const setValue = !cachedDrumPatternRef.current[instrument][step];
     setIsDragging(true);
     isDraggingRef.current = true;
     lastDragCellRef.current = `${instrument}-${step}`;
     setDrumStep(instrument, step, setValue);
 
-    const handlePointerMove = (moveEvent) => {
+    const handlePointerMove = throttle((moveEvent) => {
       if (!isDraggingRef.current) return;
       const element = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
       if (!element) return;
@@ -157,43 +394,87 @@ function BeatStudio({ onBeatReady, disabled }) {
         const key = `${instAttr}-${stepAttr}`;
         if (lastDragCellRef.current === key) return;
         lastDragCellRef.current = key;
-        setDrumStep(instAttr, parseInt(stepAttr, 10), setValue);
+        scheduleRAF(() => setDrumStep(instAttr, parseInt(stepAttr, 10), setValue));
       }
-    };
+    }, 16); // ~60fps throttle
 
     const handlePointerUp = () => {
       document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerUp);
       setIsDragging(false);
       isDraggingRef.current = false;
       lastDragCellRef.current = null;
     };
 
-    document.addEventListener('pointermove', handlePointerMove);
-    document.addEventListener('pointerup', handlePointerUp, { once: true });
-  };
+    document.addEventListener('pointermove', handlePointerMove, { passive: true });
+    document.addEventListener('pointerup', handlePointerUp, { once: true, passive: true });
+  }, [setDrumStep]);
 
-  const setMelodyNote = (noteIndex, step, shouldAdd) => {
+  const setMelodyNote = useCallback((noteIndex, step, shouldAdd) => {
     const note = SYNTH_NOTES[noteIndex];
-    setMelodyPattern(prev => prev.map((notes, i) => {
-      if (i !== step) return notes;
-      const noteArray = [...notes];
-      const idx = noteArray.indexOf(note);
-      if (shouldAdd && idx === -1) noteArray.push(note);
-      else if (!shouldAdd && idx > -1) noteArray.splice(idx, 1);
-      return noteArray;
-    }));
-  };
+     const currentMergeMode = isMergeModeRef.current;
+    
+    batchStateUpdate(() => {
+       // Always update melody pattern
+      setMelodyPattern(prev => {
+        const noteArray = prev[step].slice();
+        const idx = noteArray.indexOf(note);
+        
+         if ((shouldAdd && idx !== -1) || (!shouldAdd && idx === -1)) return prev;
+        
+        if (shouldAdd) {
+          noteArray.push(note);
+        } else {
+          noteArray.splice(idx, 1);
+        }
+        
+        const newPattern = prev.slice();
+        newPattern[step] = noteArray;
+        return newPattern;
+      });
+      
+       // Update merge pattern based on current merge mode
+       setMergePattern(prev => {
+         const noteArray = prev[step].slice();
+         const idx = noteArray.indexOf(note);
+       
+         // If merge mode is ON, add/remove from merge pattern like melody
+         // If merge mode is OFF, only remove if removing from melody
+         if (currentMergeMode) {
+           // Merge mode ON: sync with melody pattern
+           if ((shouldAdd && idx !== -1) || (!shouldAdd && idx === -1)) return prev;
+         
+           if (shouldAdd) {
+             noteArray.push(note);
+           } else {
+             noteArray.splice(idx, 1);
+           }
+         } else {
+           // Merge mode OFF: only remove from merge if removing from melody
+           if (!shouldAdd && idx !== -1) {
+             noteArray.splice(idx, 1);
+           } else {
+             return prev; // No change needed
+           }
+         }
+       
+         const newPattern = prev.slice();
+         newPattern[step] = noteArray;
+         return newPattern;
+       });
+    });
+   }, [batchStateUpdate]);
 
-  const handleMelodyMouseDown = (noteIndex, step, e) => {
+  const handleMelodyMouseDown = useCallback((noteIndex, step, e) => {
     e.preventDefault();
     const note = SYNTH_NOTES[noteIndex];
-    const shouldAdd = !melodyPattern[step].includes(note);
+    const shouldAdd = !cachedMelodyPatternRef.current[step].includes(note);
     setIsDragging(true);
     isDraggingRef.current = true;
     lastDragCellRef.current = `${noteIndex}-${step}`;
     setMelodyNote(noteIndex, step, shouldAdd);
 
-    const handlePointerMove = (moveEvent) => {
+    const handlePointerMove = throttle((moveEvent) => {
       if (!isDraggingRef.current) return;
       const element = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
       const nIdx = element?.getAttribute('data-note-index');
@@ -202,58 +483,76 @@ function BeatStudio({ onBeatReady, disabled }) {
         const key = `${nIdx}-${sIdx}`;
         if (lastDragCellRef.current === key) return;
         lastDragCellRef.current = key;
-        setMelodyNote(parseInt(nIdx, 10), parseInt(sIdx, 10), shouldAdd);
+        scheduleRAF(() => setMelodyNote(parseInt(nIdx, 10), parseInt(sIdx, 10), shouldAdd));
       }
-    };
+    }, 16);
 
     const handlePointerUp = () => {
       document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerUp);
       setIsDragging(false);
       isDraggingRef.current = false;
       lastDragCellRef.current = null;
     };
 
-    document.addEventListener('pointermove', handlePointerMove);
-    document.addEventListener('pointerup', handlePointerUp, { once: true });
-  };
+    document.addEventListener('pointermove', handlePointerMove, { passive: true });
+    document.addEventListener('pointerup', handlePointerUp, { once: true, passive: true });
+  }, [setMelodyNote]);
 
-  const addDrumColumn = () => {
+  const addDrumColumn = useCallback(() => {
     if (drumSteps >= MAX_STEPS) return;
-    setDrumSteps(s => s + 1);
-    setDrumPattern(prev => {
-      const next = {};
-      INSTRUMENTS.forEach(inst => { next[inst] = [...prev[inst], false]; });
-      return next;
+    scheduleRAF(() => {
+      setDrumSteps(s => s + 1);
+      setDrumPattern(prev => {
+        const next = {};
+        for (let i = 0; i < 8; i++) {
+          const inst = INSTRUMENTS[i];
+          next[inst] = [...prev[inst], false];
+        }
+        return next;
+      });
     });
-  };
+  }, [drumSteps]);
 
-  const removeDrumColumn = () => {
+  const removeDrumColumn = useCallback(() => {
     if (drumSteps <= MIN_STEPS) return;
-    setDrumSteps(s => s - 1);
-    setDrumPattern(prev => {
-      const next = {};
-      INSTRUMENTS.forEach(inst => { next[inst] = prev[inst].slice(0, -1); });
-      return next;
+    scheduleRAF(() => {
+      setDrumSteps(s => s - 1);
+      setDrumPattern(prev => {
+        const next = {};
+        for (let i = 0; i < 8; i++) {
+          const inst = INSTRUMENTS[i];
+          next[inst] = prev[inst].slice(0, -1);
+        }
+        return next;
+      });
     });
-  };
+  }, [drumSteps]);
 
-  const addMelodyColumn = () => {
+  const addMelodyColumn = useCallback(() => {
     if (melodySteps >= MAX_STEPS) return;
-    setMelodySteps(s => s + 1);
-    setMelodyPattern(prev => [...prev, []]);
-  };
+    scheduleRAF(() => {
+      setMelodySteps(s => s + 1);
+      setMelodyPattern(prev => [...prev, []]);
+      setMergePattern(prev => [...prev, []]);
+    });
+  }, [melodySteps]);
 
-  const removeMelodyColumn = () => {
+  const removeMelodyColumn = useCallback(() => {
     if (melodySteps <= MIN_STEPS) return;
-    setMelodySteps(s => s - 1);
-    setMelodyPattern(prev => prev.slice(0, -1));
-  };
+    scheduleRAF(() => {
+      setMelodySteps(s => s - 1);
+      setMelodyPattern(prev => prev.slice(0, -1));
+      setMergePattern(prev => prev.slice(0, -1));
+    });
+  }, [melodySteps]);
 
   const clearAll = () => {
     const emptyDrums = {};
     INSTRUMENTS.forEach(inst => { emptyDrums[inst] = Array(drumSteps).fill(false); });
     setDrumPattern(emptyDrums);
     setMelodyPattern(Array(melodySteps).fill(null).map(() => []));
+    setMergePattern(Array(melodySteps).fill(null).map(() => []));
   };
 
   const generateBeat = () => {
@@ -459,7 +758,7 @@ function BeatStudio({ onBeatReady, disabled }) {
         await Promise.all(INSTRUMENTS.map(inst => offlinePlayers[inst].load(DRUM_SAMPLES[inst])));
         const offlineSynth = new Tone.PolySynth(Tone.Synth, {
           oscillator: { type: 'triangle' },
-          envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 0.4 }
+          envelope: { attack: 0.02, decay: 0.1, sustain: 0.8, release: 0.2 }
         }).connect(offlineSynthVol);
 
         await Tone.loaded();
@@ -474,8 +773,35 @@ function BeatStudio({ onBeatReady, disabled }) {
           }
           if (step < melodySteps) {
             const notes = melodyPattern[step];
+            const mergeNotes = mergePattern[step];
             if (notes && notes.length > 0) {
-              transport.schedule(t => offlineSynth.triggerAttackRelease(notes, '8n', t), time);
+              notes.forEach(note => {
+                const isMerge = mergeNotes && mergeNotes.includes(note);
+                
+                if (isMerge) {
+                  // Only trigger merge notes at the START of their sequence
+                  const isPreviousStepMerge = step > 0 && mergePattern[step - 1] && mergePattern[step - 1].includes(note);
+                  if (!isPreviousStepMerge) {
+                    // Calculate duration in steps
+                    let duration = 1;
+                    for (let i = step + 1; i < melodySteps; i++) {
+                      if (mergePattern[i] && mergePattern[i].includes(note)) {
+                        duration++;
+                      } else {
+                        break;
+                      }
+                    }
+                    // Convert to seconds
+                    const secondsPerSixteenth = (60 / bpm) / 4;
+                    const totalSeconds = secondsPerSixteenth * duration;
+                    transport.schedule(t => offlineSynth.triggerAttackRelease([note], totalSeconds, t), time);
+                  }
+                } else {
+                  // Normal note
+                  const sixteenthNoteDuration = (60 / bpm) / 4;
+                  transport.schedule(t => offlineSynth.triggerAttackRelease([note], sixteenthNoteDuration, t), time);
+                }
+              });
             }
           }
         }
@@ -584,13 +910,13 @@ function BeatStudio({ onBeatReady, disabled }) {
                 </div>
                 <div className="step-grid">
                   {drumPattern[inst].map((active, step) => (
-                    <button
+                    <DrumCell
                       key={step}
-                      className={`step-btn ${active ? 'active' : ''} ${currentStep === step ? 'current' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
-                      data-instrument={inst}
-                      data-step={step}
+                      inst={inst}
+                      step={step}
+                      active={active}
+                      isPlaying={isPlaying}
                       onMouseDown={(e) => handleDrumMouseDown(inst, step, e)}
-                      style={{ userSelect: 'none', touchAction: 'none' }}
                     />
                   ))}
                 </div>
@@ -606,6 +932,13 @@ function BeatStudio({ onBeatReady, disabled }) {
           <button onClick={removeMelodyColumn} className="btn btn-sm" disabled={melodySteps <= MIN_STEPS}>-</button>
           <span>{melodySteps} steps</span>
           <button onClick={addMelodyColumn} className="btn btn-sm" disabled={melodySteps >= MAX_STEPS}>+</button>
+          <button 
+            onClick={() => setIsMergeMode(!isMergeMode)} 
+            className={`btn btn-sm ${isMergeMode ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ marginLeft: '10px' }}
+          >
+            {isMergeMode ? '🔵 Merge Mode' : '⚪ Normal Mode'}
+          </button>
         </div>
         <div className="melody-grid">
           <div className="instrument-label">
@@ -626,16 +959,20 @@ function BeatStudio({ onBeatReady, disabled }) {
                 <div key={note} className="piano-row">
                   <span className="note-label">{note}</span>
                   <div className="step-grid">
-                    {melodyPattern.map((activeNotes, step) => (
-                      <button
-                        key={step}
-                        className={`step-btn melody-btn ${activeNotes.includes(note) ? 'active' : ''} ${currentStep === step ? 'current' : ''} ${step % 4 === 0 ? 'beat-start' : ''}`}
-                        data-note-index={SYNTH_NOTES.length - 1 - noteIdx}
-                        data-step={step}
-                        onMouseDown={(e) => handleMelodyMouseDown(SYNTH_NOTES.length - 1 - noteIdx, step, e)}
-                        style={{ userSelect: 'none', touchAction: 'none' }}
-                      />
-                    ))}
+                    {melodyPattern.map((activeNotes, step) => {
+                      const isActive = activeNotes.includes(note);
+                      const isMerge = isActive && mergePattern[step] && mergePattern[step].includes(note);
+                      return (
+                        <MelodyCell
+                          key={step}
+                          noteIndex={SYNTH_NOTES.length - 1 - noteIdx}
+                          step={step}
+                          isActive={isActive}
+                          isMerge={isMerge}
+                          onMouseDown={(e) => handleMelodyMouseDown(SYNTH_NOTES.length - 1 - noteIdx, step, e)}
+                        />
+                      );
+                    })}
                   </div>
                 </div>
               ))}
