@@ -1,4 +1,4 @@
-# 🎵 AI Music Studio
+# 🎵 JamAI
 
 A minimal full-stack MVP that lets users create or upload a beat and have ElevenLabs AI sing vocals over it.
 

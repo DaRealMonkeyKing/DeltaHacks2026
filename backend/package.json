@@ -1,7 +1,7 @@
 {
-  "name": "ai-music-studio-backend",
+  "name": "jamai-backend",
   "version": "1.0.0",
-  "description": "Backend for AI Music Studio - generates vocals and mixes audio",
+  "description": "Backend for JamAI - generates vocals and mixes audio",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

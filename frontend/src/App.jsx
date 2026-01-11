@@ -316,7 +316,7 @@ function App() {
         <header className="header">
           <div className="logo">
             <span className="logo-icon">♪</span>
-            <h1>AI Music Studio</h1>
+            <h1>JamAI</h1>
           </div>
           <p className="tagline">Create or upload a beat. Add lyrics. Let AI sing.</p>
         </header>
