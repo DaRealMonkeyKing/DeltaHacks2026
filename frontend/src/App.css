@@ -798,6 +798,7 @@ audio::-webkit-media-controls-time-remaining-display {
   align-items: center;
   gap: 0.75rem;
   width: 100%;
+  contain: layout style;
 }
 
 .piano-row {
@@ -805,6 +806,7 @@ audio::-webkit-media-controls-time-remaining-display {
   align-items: center;
   gap: 0.75rem;
   width: 100%;
+  contain: layout style;
 }
 
 /* Instrument Labels */
@@ -873,6 +875,9 @@ audio::-webkit-media-controls-time-remaining-display {
   gap: 3px;
   min-width: max-content;
   padding-bottom: 2px;
+  /* Rendering optimization */
+  contain: layout style paint;
+  content-visibility: auto;
 }
 
 .step-btn {
@@ -883,6 +888,10 @@ audio::-webkit-media-controls-time-remaining-display {
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.1s ease;
+  /* Hardware acceleration */
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  will-change: transform, background, border-color;
 }
 
 .step-btn:hover {
@@ -896,12 +905,25 @@ audio::-webkit-media-controls-time-remaining-display {
 }
 
 .step-btn.melody-btn.active {
-  background: var(--accent-purple);
-  border-color: var(--accent-purple);
+  background: #ff6b35;
+  border-color: #ff6b35;
+}
+
+/* Merge notes get blue color - higher specificity */
+.step-btn.melody-btn.merge-note {
+  background: #3b82f6 !important;
+  border-color: #2563eb !important;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4) !important;
+}
+
+.step-btn.melody-btn.merge-note:hover {
+  background: #60a5fa !important;
+  border-color: #3b82f6 !important;
 }
 
 .step-btn.current {
-  box-shadow: 0 0 0 2px var(--accent-secondary);
+  /* Subtle current-step indicator (no harsh yellow border) */
+  box-shadow: 0 0 6px rgba(255, 217, 61, 0.35), 0 0 0 1px rgba(255, 217, 61, 0.4);
 }
 
 .step-btn.beat-start {
