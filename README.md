@@ -136,18 +136,21 @@ The app will be available at http://localhost:3000
 ## How It Works
 
 1. **Get Your Beat**
-   - Toggle between "Upload Beat" and "Create My Beat"
+   - Toggle between "Upload Beat", "Create My Beat", and "AI Generate Beat"
    - If creating: Use the drum sequencer and melody piano roll
+   - If AI generating: Describe the beat in the text field and click "Generate Beat"
    - Click "Use This Beat" to export your creation
 
 2. **Enter Lyrics**
    - Type or paste your lyrics in the text area
 
-3. **Generate Vocals**
+3. **Record Voice**
+
+4. **Generate Vocals**
    - Select an AI voice from the dropdown
    - Click "Generate AI Vocals"
 
-4. **Mix & Download**
+5. **Mix & Download**
    - Click "Mix Vocals + Beat" to combine
    - Preview the final track
    - Download as MP3
